@@ -76,18 +76,22 @@ module tb_lifi_system;
         
         @(posedge clk_phy);
         phy_sot   <= 1;
+        @(posedge clk_phy);
+        phy_sot   <= 0;
+        repeat (4) @(posedge clk_phy);   // framer sends preamble + K28.5 comma first
+
+        @(posedge clk_phy);
         phy_valid <= 1;
         phy_byte  <= 8'h2B; // RAW10 Data ID
 
         @(posedge clk_phy);
-        phy_sot   <= 0;
         phy_byte  <= 8'h05; // WC LSB = 5 bytes
 
         @(posedge clk_phy);
         phy_byte  <= 8'h00; // WC MSB = 0
 
         @(posedge clk_phy);
-        phy_byte  <= 8'h00; // ECC
+        phy_byte  <= 8'h09; // header ECC for DI=0x2B, WC=5
 
         // 5 RAW10 Payload Bytes:
         @(posedge clk_phy); phy_byte <= 8'hC0;
@@ -96,9 +100,9 @@ module tb_lifi_system;
         @(posedge clk_phy); phy_byte <= 8'h90;
         @(posedge clk_phy); phy_byte <= 8'h1B;
 
-        // CRC
-        @(posedge clk_phy); phy_byte <= 8'h00;
-        @(posedge clk_phy); phy_byte <= 8'h00;
+        // CRC-16 of the payload, low byte first
+        @(posedge clk_phy); phy_byte <= 8'h45;
+        @(posedge clk_phy); phy_byte <= 8'hDD;
 
         @(posedge clk_phy);
         phy_eot   <= 1;
@@ -109,15 +113,31 @@ module tb_lifi_system;
 
         #2000;
         $display("\n==================================================================");
-        $display("   1-Bit Serial System Simulation Completed Successfully!         ");
+        if (px_n == 4 && px_bad == 0 && ecc_err_n == 0 && crc_err_n == 0 && saw_last)
+            $display("   PASS: 4 pixels C0 B0 A0 90 received, ECC/CRC clean, last flagged");
+        else
+            $display("   FAIL: px=%0d bad=%0d ecc_err=%0d crc_err=%0d last=%b",
+                     px_n, px_bad, ecc_err_n, crc_err_n, saw_last);
         $display("==================================================================");
         $finish;
     end
 
+    // Self-check: RAW10 bytes C0 B0 A0 90 -> grayscale pixels replicated to RGB24
+    reg [7:0] exp_px [0:3];
+    initial begin exp_px[0] = 8'hC0; exp_px[1] = 8'hB0; exp_px[2] = 8'hA0; exp_px[3] = 8'h90; end
+    integer px_n = 0, px_bad = 0, ecc_err_n = 0, crc_err_n = 0;
+    reg saw_last = 1'b0;
     always @(posedge clk_sys) begin
         if (px_valid) begin
             $display("[RX Output Pixel @ clk_sys] RGB24 = 0x%06X (last=%b)", px_out, px_last);
+            if (px_n < 4 && px_out !== {3{exp_px[px_n]}}) px_bad = px_bad + 1;
+            px_n = px_n + 1;
+            if (px_last) saw_last = 1'b1;
         end
+    end
+    always @(posedge clk_phy) begin
+        if (ecc_error) ecc_err_n = ecc_err_n + 1;
+        if (crc_error) crc_err_n = crc_err_n + 1;
     end
 
 endmodule

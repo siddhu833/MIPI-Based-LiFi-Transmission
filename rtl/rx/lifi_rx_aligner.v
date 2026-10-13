@@ -3,69 +3,55 @@
 // lifi_rx_aligner.v
 // Li-Fi 1-Bit Serial Symbol Aligner
 //
-// Samples incoming 1-bit pd_rx_serial stream on clk_bit (10x clock).
-// Searches for K.28.5 Comma pattern (0011111xxx or 1100000xxx) to establish word alignment.
-// Outputs aligned 10-bit symbols on clk_cdr (1x clock).
+// Samples the 1-bit serial stream on clk_bit (10x clk_cdr, phase-related) MSB-first
+// (bit 'a' of each 8b/10b symbol arrives first, so the newest bit is shift_reg[0]).
+// A K.28.x comma (a..f = 0011111 or 1100000) in shift_reg[9:3] marks a symbol
+// boundary; after that a 10-bit word is registered every 10 clk_bit cycles.
+//
+// The registered word is held stable for 10 clk_bit cycles (one clk_cdr period),
+// so the clk_cdr-domain decoder samples it without a pulse-crossing problem.
+// aligned_valid stays high once locked (one new symbol per clk_cdr cycle).
 // =============================================================================
 module lifi_rx_aligner (
-    input  wire       clk_bit,        // 10x Serial Bit Clock (2.0 GHz)
-    input  wire       clk_cdr,        // 1x Symbol Clock (200 MHz)
+    input  wire       clk_bit,        // 10x serial bit clock
+    input  wire       clk_cdr,        // 1x symbol clock (same source as clk_bit/10)
     input  wire       rst_n,
     input  wire       pd_rx_serial,   // 1-bit optical serial input
-    
+
     output reg  [9:0] aligned_10b_out,
     output reg        aligned_valid,
     output reg        aligned_lock
 );
 
-    reg [19:0] shift_reg;
-    reg [3:0]  bit_cnt;
-    reg [3:0]  comma_pos;
-    reg        locked;
+    reg [9:0] shift_reg;
+    reg [3:0] bit_cnt;
+    reg       locked;
 
-    // Search 20-bit window for 7-bit K.28.5 Comma pattern:
-    // RD-: 0011111 (0x1F)
-    // RD+: 1100000 (0x60)
-    integer i;
-    reg [3:0] found_pos;
-    reg       found;
+    wire comma = (shift_reg[9:3] == 7'b0011111) || (shift_reg[9:3] == 7'b1100000);
 
-    always @(*) begin
-        found     = 1'b0;
-        found_pos = 4'd0;
-        for (i = 0; i <= 9; i = i + 1) begin
-            if (!found) begin
-                if (shift_reg[i +: 7] == 7'b0011111 || shift_reg[i +: 7] == 7'b1100000) begin
-                    found     = 1'b1;
-                    found_pos = i[3:0];
-                end
-            end
-        end
-    end
-
-    // 1-bit Serial Sampling & Comma Detection (clk_bit domain)
     always @(posedge clk_bit or negedge rst_n) begin
         if (!rst_n) begin
-            shift_reg       <= 20'b0;
+            shift_reg       <= 10'b0;
             aligned_10b_out <= 10'b0;
             aligned_valid   <= 1'b0;
             aligned_lock    <= 1'b0;
-            comma_pos       <= 4'd0;
-            locked          <= 1'b0;
             bit_cnt         <= 4'd0;
+            locked          <= 1'b0;
         end else begin
-            shift_reg     <= {shift_reg[18:0], pd_rx_serial};
-            aligned_valid <= 1'b0;
+            shift_reg <= {shift_reg[8:0], pd_rx_serial};
 
-            if (found && !locked) begin
-                locked       <= 1'b1;
-                comma_pos    <= found_pos;
-                aligned_lock <= 1'b1;
-                bit_cnt      <= 4'd0;
-            end else if (locked) begin
-                if (bit_cnt == 4'd9) begin
-                    aligned_10b_out <= shift_reg[comma_pos +: 10];
+            if (!locked) begin
+                if (comma) begin
+                    // shift_reg holds a complete, aligned symbol right now
+                    locked          <= 1'b1;
+                    aligned_lock    <= 1'b1;
                     aligned_valid   <= 1'b1;
+                    aligned_10b_out <= shift_reg;
+                    bit_cnt         <= 4'd1;
+                end
+            end else begin
+                if (bit_cnt == 4'd9) begin
+                    aligned_10b_out <= {shift_reg[8:0], pd_rx_serial};
                     bit_cnt         <= 4'd0;
                 end else begin
                     bit_cnt         <= bit_cnt + 1'b1;

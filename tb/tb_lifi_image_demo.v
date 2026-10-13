@@ -115,11 +115,22 @@ module tb_lifi_image_demo;
         #30000;
         $fclose(file_out);
         $display("[Verilog] 1-Bit Serial Image Simulation completed.");
+        $display("[Verilog] pixels received = %0d, ecc_error cycles = %0d, crc_error cycles = %0d",
+                 px_count, ecc_err_cnt, crc_err_cnt);
         $finish;
+    end
+
+    // Error / count monitors (CRC and ECC must be clean for a good transfer)
+    integer px_count = 0, ecc_err_cnt = 0, crc_err_cnt = 0, ecc_corr_cnt = 0;
+    always @(posedge clk_phy) begin
+        if (ecc_error)     ecc_err_cnt  = ecc_err_cnt + 1;
+        if (crc_error)     crc_err_cnt  = crc_err_cnt + 1;
+        if (ecc_corrected) ecc_corr_cnt = ecc_corr_cnt + 1;
     end
 
     always @(posedge clk_sys) begin
         if (px_valid) begin
+            px_count = px_count + 1;
             $fwrite(file_out, "%06X\n", px_out);
         end
     end

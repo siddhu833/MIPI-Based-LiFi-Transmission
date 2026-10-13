@@ -88,9 +88,10 @@ module decoder_8b10b (
     // 4b -> 3b decoding
     always @(*) begin
         err_4b = 1'b0;
-        case (fghj)
+        // K28.x with RD+ (abcdei = 110000) carries the complemented fghj
+        case (is_k && abcdei == 6'b110000 ? ~fghj : fghj)
             4'b1011, 4'b0100: hgf = 3'b000; // y=0
-            4'b1001, 4'b0110: hgf = 3'b001; // y=1
+            4'b1001:          hgf = 3'b001; // y=1
             4'b0101:          hgf = 3'b010; // y=2
             4'b0011, 4'b1100: hgf = 3'b011; // y=3
             4'b1101, 4'b0010: hgf = 3'b100; // y=4

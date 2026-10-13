@@ -45,6 +45,14 @@ module ecc_crc_checker #(
     reg [2:0]  state;
     reg [1:0]  hdr_cnt;
     reg [15:0] payload_cnt;
+    reg        armed;      // set by the K.28.5 comma; the next data byte is header byte 0
+
+    // Output queue: the 3 header bytes (DI, WC lsb, WC msb) are pushed in one cycle,
+    // payload bytes follow one per cycle, and the queue pops one byte per cycle.
+    // The queue adds ~2 bytes of latency only; it is still cut-through.
+    reg [7:0] q_d [0:7];
+    reg       q_l [0:7];
+    reg [2:0] q_wptr, q_rptr;
 
     reg [7:0] hdr_b0, hdr_b1, hdr_b2;
     wire [7:0] hdr_b3 = d_in;
@@ -86,6 +94,9 @@ module ecc_crc_checker #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state         <= IDLE;
+            armed         <= 1'b0;
+            q_wptr        <= 3'd0;
+            q_rptr        <= 3'd0;
             hdr_cnt       <= 2'd0;
             payload_cnt   <= 16'd0;
             d_out         <= 8'h00;
@@ -103,11 +114,21 @@ module ecc_crc_checker #(
             valid_out   <= 1'b0;
             last_out    <= 1'b0;
 
+            if (q_rptr != q_wptr) begin
+                d_out     <= q_d[q_rptr];
+                last_out  <= q_l[q_rptr];
+                valid_out <= 1'b1;
+                q_rptr    <= q_rptr + 1'b1;
+            end
+
             case (state)
                 IDLE: begin
                     hdr_cnt     <= 2'd0;
                     payload_cnt <= 16'd0;
-                    if (valid_in && !k_in) begin
+                    if (valid_in && k_in && d_in == 8'hBC) begin
+                        armed <= 1'b1;
+                    end else if (valid_in && !k_in && armed) begin
+                        armed   <= 1'b0;
                         hdr_b0  <= d_in;
                         hdr_cnt <= 2'd1;
                         state   <= HEADER;
@@ -126,9 +147,16 @@ module ecc_crc_checker #(
                                 data_id       <= corr_data_id;
                                 word_count    <= {corr_wc_msb, corr_wc_lsb};
 
-                                // Emit corrected header data_id immediately
-                                d_out     <= corr_data_id;
-                                valid_out <= 1'b1;
+                                // Queue the corrected header: DI, WC lsb, WC msb
+                                if (!ecc_err_w && corr_data_id >= 8'h10) begin
+                                    q_d[q_wptr]        <= corr_data_id;
+                                    q_l[q_wptr]        <= 1'b0;
+                                    q_d[q_wptr + 3'd1] <= corr_wc_lsb;
+                                    q_l[q_wptr + 3'd1] <= 1'b0;
+                                    q_d[q_wptr + 3'd2] <= {2'b00, corr_wc_msb};
+                                    q_l[q_wptr + 3'd2] <= 1'b0;
+                                    q_wptr             <= q_wptr + 3'd3;
+                                end
 
                                 if (ecc_err_w || corr_data_id < 8'h10) begin
                                     packet_done <= 1'b1;
@@ -143,8 +171,9 @@ module ecc_crc_checker #(
 
                 PAYLOAD: begin
                     if (valid_in && !k_in) begin
-                        d_out       <= d_in;
-                        valid_out   <= 1'b1;
+                        q_d[q_wptr] <= d_in;
+                        q_l[q_wptr] <= (payload_cnt == word_count - 1'b1);
+                        q_wptr      <= q_wptr + 1'b1;
                         payload_cnt <= payload_cnt + 1'b1;
 
                         if (payload_cnt == word_count - 1) begin
@@ -167,7 +196,6 @@ module ecc_crc_checker #(
                         end else begin
                             crc_error <= 1'b0;
                         end
-                        last_out    <= 1'b1;
                         packet_done <= 1'b1;
                         state       <= IDLE;
                     end

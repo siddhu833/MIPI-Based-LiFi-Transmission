@@ -90,6 +90,8 @@ module lifi_rx_top #(
     );
 
     // 4. Asymmetric AXI-Stream Async FIFO Bridge (8-bit @ clk_cdr -> 24-bit @ clk_sys)
+    wire        hdr_ready;     // back-pressure: parser -> FIFO
+    wire        unpack_ready;  // back-pressure: unpacker -> parser
     wire [23:0] fifo_24b_data;
     wire [2:0]  fifo_24b_keep;
     wire        fifo_24b_valid;
@@ -110,7 +112,7 @@ module lifi_rx_top #(
         .m_axis_tdata(fifo_24b_data),
         .m_axis_tkeep(fifo_24b_keep),
         .m_axis_tvalid(fifo_24b_valid),
-        .m_axis_tready(1'b1),
+        .m_axis_tready(hdr_ready),
         .m_axis_tlast(fifo_24b_last)
     );
 
@@ -130,7 +132,7 @@ module lifi_rx_top #(
         .s_axis_tdata(fifo_24b_data),
         .s_axis_tkeep(fifo_24b_keep),
         .s_axis_tvalid(fifo_24b_valid),
-        .s_axis_tready(),
+        .s_axis_tready(hdr_ready),
         .s_axis_tlast(fifo_24b_last),
 
         .data_id(hdr_data_id),
@@ -140,7 +142,7 @@ module lifi_rx_top #(
         .m_axis_tdata(unpack_data),
         .m_axis_tkeep(unpack_keep),
         .m_axis_tvalid(unpack_valid),
-        .m_axis_tready(1'b1),
+        .m_axis_tready(unpack_ready),
         .m_axis_tlast(unpack_last)
     );
 
@@ -152,7 +154,7 @@ module lifi_rx_top #(
         .s_axis_tdata(unpack_data),
         .s_axis_tkeep(unpack_keep),
         .s_axis_tvalid(unpack_valid),
-        .s_axis_tready(),
+        .s_axis_tready(unpack_ready),
         .s_axis_tlast(unpack_last),
         .px_out(px_out),
         .px_valid(px_valid),

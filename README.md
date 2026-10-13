@@ -23,18 +23,39 @@ receiver recovers symbols, checks ECC/CRC, crosses clock domains and unpacks pix
 
 ## Run (Icarus Verilog)
 ```
-iverilog -o sim_sys.vvp tb/tb_lifi_system.v rtl/lifi_system_top.v rtl/tx/*.v rtl/rx/*.v rtl/common/*.v
+# 1. Self-checking system test (one RAW10 packet, 4 pixels, ECC/CRC clean) -> prints PASS/FAIL
+iverilog -o sim_sys.vvp -s tb_lifi_system tb/tb_lifi_system.v rtl/lifi_system_top.v rtl/tx/*.v rtl/rx/*.v rtl/common/*.v
 vvp sim_sys.vvp
-```
-Image demo: `python scripts/img_to_mipi.py data/sample_input.png tb/mipi_tx_stream.hex`, then
-compile `tb/tb_lifi_image_demo.v` the same way, run it, then
-`python scripts/mipi_to_img.py tb/mipi_rx_pixels.hex out.png 64 64`.
 
-## Status (honest)
-* All RTL and the TX, system and image testbenches compile and run to completion.
-* `tb_lifi_tx` and `tb_lifi_system` are **print-and-inspect** testbenches, not self-checking.
-* The 64x64 image loopback is **not yet bit-exact**: the demo currently captures 4401
-  pixel words for a 4096-pixel image and the reconstructed picture does not match the input.
-  Debugging the RX alignment / packet boundary handling is the open item.
-* Not yet done: lint/CDC sign-off for this design, synthesis/timing, hardware bring-up
-  (the optical front end is not part of the RTL).
+# 2. 64x64 image through the 1-bit link, compared pixel by pixel
+python scripts/img_to_mipi.py data/sample_input.png tb/mipi_tx_stream.hex
+iverilog -o sim_img.vvp -s tb_lifi_image_demo tb/tb_lifi_image_demo.v rtl/lifi_system_top.v rtl/tx/*.v rtl/rx/*.v rtl/common/*.v
+vvp sim_img.vvp
+python scripts/mipi_to_img.py tb/mipi_rx_pixels.hex out.png 64 64 data/sample_input.png   # prints PASS/FAIL
+```
+
+## Status
+* Image loopback: 64x64 image, **4096/4096 pixels match** the grayscale reference, 0 ECC errors, 0 CRC errors.
+* Error detection checked by corrupting the input: a bad payload byte raises `crc_error` (and the
+  compare script reports FAIL); a 1-bit header error is corrected by the ECC and the image still matches.
+* `tb_lifi_tx` only prints the TX side and is not self-checking.
+* Header ECC uses the same parity equations as `rtl/common/csi2_ecc_rx.v`; they have not been
+  checked against official MIPI test vectors.
+* Test images are 8-bit grayscale sent as RAW10 (sample << 2); RGB888 and RAW8 pass-through paths exist
+  but are not covered by a testbench.
+* Not done: lint/CDC sign-off for this design, synthesis/timing, hardware bring-up (the optical
+  front end is not part of the RTL). Clock ratio is assumed exactly 10:1 (`clk_bit` = 10 x `clk_phy`),
+  as from one MMCM; the aligner holds each word for one `clk_phy` period instead of using a CDC pulse.
+
+## Fixes made while bringing up the image loopback
+1. TX sent each 10-bit symbol LSB first while the RX/decoder expect `a` (bit 9) first -> now MSB first.
+2. Aligner rewritten: comma found in the last 7 received bits marks the symbol boundary; the word is
+   held stable for one symbol period (the old 1-bit-clock valid pulse was lost crossing to `clk_phy`).
+3. Decoder: `y=1` and `y=6` shared a code, and K28.x with RD+ needs the complemented `fghj` field.
+4. ECC/CRC checker: only starts a header after the K28.5 comma (the 0x55 preamble was parsed as a header),
+   now emits all 3 header bytes (DI, WC lsb, WC msb), and flags `tlast` on the last payload byte.
+5. Pixel unpacker rewritten with back-pressure (the old one dropped words and corrupted its buffer);
+   FIFO -> parser -> unpacker now use ready signals.
+6. `img_to_mipi.py` now writes real header ECC and payload CRC-16 instead of dummy values, and the
+   10-bit samples are the 8-bit gray value << 2 so the receiver's top 8 bits equal the gray value.
+7. Removed two stale testbenches (`tb_csi2_rx_ecc_crc`, `tb_pixel_unpack`) written for older module ports.

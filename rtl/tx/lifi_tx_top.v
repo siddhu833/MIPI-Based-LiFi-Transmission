@@ -72,7 +72,7 @@ module lifi_tx_top #(
         .rd_out()
     );
 
-    // 4. Parallel-In Serial-Out (PISO) Serializer (8b/10b standard: bit 'a' [bit 0] first)
+    // 4. Parallel-In Serial-Out (PISO) Serializer (q_out[9]=a is sent first)
     reg [9:0] shift_reg;
     reg [3:0] bit_cnt;
 
@@ -85,14 +85,14 @@ module lifi_tx_top #(
             if (bit_cnt == 4'd0 || bit_cnt == 4'd10) begin
                 if (enc_valid) begin
                     shift_reg     <= enc_10b;
-                    led_tx_serial <= enc_10b[0]; // Transmit bit 'a' (LSB) first per 8b/10b spec
+                    led_tx_serial <= enc_10b[9]; // 'a' is q_out[9]: send it first (8b/10b order a,b,c,d,e,i,f,g,h,j)
                     bit_cnt       <= 4'd1;
                 end else begin
                     led_tx_serial <= 1'b0;
                     bit_cnt       <= 4'd0;
                 end
             end else begin
-                led_tx_serial <= shift_reg[bit_cnt];
+                led_tx_serial <= shift_reg[9 - bit_cnt];
                 bit_cnt       <= bit_cnt + 1'b1;
             end
         end
